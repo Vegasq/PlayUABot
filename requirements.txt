@@ -1,0 +1,5 @@
+feedparser==5.2.1
+future==0.15.2
+pickleDB
+python_telegram_bot
+simplejson==3.8.2
