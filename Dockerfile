@@ -36,7 +36,5 @@ RUN git fetch origin pull/13/head:fixedpy3
 RUN git checkout fixedpy3
 RUN pip3 install -e . -U
 
-VOLUME /playuadb
-
 ENTRYPOINT ["/opt/playuabot/bot.py"]
 
