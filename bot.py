@@ -7,13 +7,14 @@
 
 import telegram
 import feedparser
-import pickledb
-# from telegram.ext import Updater
+from telegram.ext import Updater
 from telegram.error import NetworkError, Unauthorized
 
 import time
 from time import sleep
 import logging
+
+import db
 
 
 logging.basicConfig(
@@ -22,14 +23,16 @@ logging.basicConfig(
 
 
 class Feed(object):
+    MARK_AS_NEW = []
+
     def __init__(self, context, url):
         self.context = context
         self.url = url
         self._last_refresh = None
         self.entries = []
-        self.skip_exists = False
 
-        self._db = pickledb.load(self.context.db_path, False)
+    def clear(self):
+        self.entries = []
 
     def refresh(self):
         logging.debug("Refresh feed")
@@ -42,12 +45,17 @@ class Feed(object):
             self.entries = []
             logging.debug(d['entries'])
             for entry in d['entries']:
-                entry_in_db = self._db.get(entry['id'])
+                entry_in_db = db.db_get(entry['id'])
+
+                if entry['id'] in self.MARK_AS_NEW:
+                    logging.debug('Remove fake unread')
+                    self.MARK_AS_NEW = []
+                    entry_in_db = False
+
                 if not entry_in_db:
-                    self._db.set(entry['id'], 'True')
-                    if not self.skip_exists:
-                        self.entries.append(entry)
-            self._db.dump()
+                    logging.debug('Post %s not found in DB' % entry['id'])
+                    db.db_set(entry['id'])
+                    self.entries.append(entry)
             logging.debug("Refresh feed done")
 
 
@@ -107,8 +115,6 @@ class PlayUABot(object):
         "channel_id=UCKJZ5id-vvCi9_5ERTmBNHQ"
     ]
 
-    db_path = "playua.db"
-
     def __init__(self):
         logging.debug('Starting application...')
 
@@ -123,28 +129,32 @@ class PlayUABot(object):
             feed_manager.refresh()
             self.feed_managers.append(feed_manager)
 
-        self.debug = False
+        self.debug = True
 
-        # self.dispatch()
+        self.dispatch()
 
-    # @staticmethod
-    # def help(bot, update):
-    #     bot.sendMessage(chat_id=update.message.chat_id,
-    #                     text="Маленький чатбот який повідомлює про новини "
-    #                          "на сайті PlayUA.net")
+    @staticmethod
+    def help(bot, update):
+        bot.sendMessage(chat_id=update.message.chat_id,
+                        text="Маленький чатбот який повідомлює про новини "
+                             "на сайті PlayUA.net")
 
-    # def dispatch(self):
-    #     self._updater = Updater(token=self._key)
-    #     self._updater.dispatcher.addTelegramCommandHandler('help', self.help)
-    #     logging.error('start poll')
-    #     self._updater.start_polling()
-    #     logging.error('stop poll')
+    def dispatch(self):
+        self._updater = Updater(token=self._key)
+        self._updater.dispatcher.addTelegramCommandHandler('help', self.help)
+        logging.error('start poll')
+        self._updater.start_polling()
+        logging.error('stop poll')
 
     def start(self):
         logging.debug('Loop started')
         while True:
             try:
-                logging.debug("Chats: %s" % self.chats_manager.chats)
+                logging.debug("Send to %s chats %s messages." % (
+                    len(self.chats_manager.chats),
+                    len(self.feed_managers[0].entries) +
+                    len(self.feed_managers[1].entries)
+                ))
                 for chat in self.chats_manager.chats:
                     for fmgmt in self.feed_managers:
                         for entry in fmgmt.entries:
@@ -153,6 +163,7 @@ class PlayUABot(object):
                                     chat, entry))
                             else:
                                 chat.send(entry)
+                        fmgmt.clear()
 
             except NetworkError:
                 logging.error('NetworkError')
