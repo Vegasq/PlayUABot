@@ -1,0 +1,8 @@
+{
+    "secret_key": "",
+    "feeds": [
+        "http://playua.net/feed/",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCKJZ5id-vvCi9_5ERTmBNHQ"
+    ],
+    "description": "Маленький чатбот який повідомлює про новини на сайті PlayUA.net\n\n\nДолучитися до розробки: github.com/Vegasq/PlayUABot"
+}

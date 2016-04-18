@@ -7,12 +7,12 @@
 
 import telegram
 import feedparser
-from telegram.ext import Updater
 from telegram.error import NetworkError, Unauthorized
 
 import time
 from time import sleep
 import logging
+import json
 
 import db
 
@@ -22,14 +22,51 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
-class Feed(object):
-    MARK_AS_NEW = []
+with open('config.json', 'r', encoding='utf-8') as fl:
+    config = json.loads(fl.read())
 
+
+class NoChatsFound(Exception):
+    pass
+
+
+class get_chats(object):
+    def __init__(self, chat_manager):
+        self.chat_manager = chat_manager
+
+    def __enter__(self):
+        self.chat_manager.refresh()
+        if len(self.chat_manager.chats) == 0:
+            raise NoChatsFound()
+        return self.chat_manager.chats
+
+    def __exit__(self, type, value, traceback):
+        pass
+
+
+class get_entries(object):
+    def __init__(self, feed_managers):
+        self.feed_managers = feed_managers
+
+    def __enter__(self):
+        entries = []
+        for fm in self.feed_managers:
+            fm.refresh()
+            entries += fm.entries
+        return entries
+
+    def __exit__(self, type, value, traceback):
+        for fm in self.feed_managers:
+            fm.clear()
+
+
+class Feed(object):
     def __init__(self, context, url):
         self.context = context
         self.url = url
-        self._last_refresh = None
         self.entries = []
+
+        self._last_refresh = None
 
     def clear(self):
         self.entries = []
@@ -46,11 +83,6 @@ class Feed(object):
             logging.debug(d['entries'])
             for entry in d['entries']:
                 entry_in_db = db.db_get(entry['id'])
-
-                if entry['id'] in self.MARK_AS_NEW:
-                    logging.debug('Remove fake unread')
-                    self.MARK_AS_NEW = []
-                    entry_in_db = False
 
                 if not entry_in_db:
                     logging.debug('Post %s not found in DB' % entry['id'])
@@ -69,16 +101,6 @@ class Chat(object):
 
     def send(self, message):
         logging.debug("Send message to chat %s: %s" % (self, message))
-        logging.debug(message)
-        # if 'media_thumbnail' in message and message['media_thumbnail']:
-        #     self.context.bot.sendPhoto(
-        #         chat_id=self._chat.id,
-        #         photo=message['media_thumbnail'][0]['url'],
-        #         disable_notification=True)
-
-        # disable_preview = None
-        # if 'media_thumbnail' in message and message['media_thumbnail']:
-        #     disable_preview = True
         self.context.bot.sendMessage(chat_id=self._chat.id,
                                      text=self._format_message(message),
                                      parse_mode=telegram.ParseMode.HTML)
@@ -100,7 +122,6 @@ class Chats(object):
                 self._add(update.message.chat)
         except NetworkError as e:
             logging.error(e)
-            # raise
 
     @property
     def chats(self):
@@ -108,75 +129,52 @@ class Chats(object):
 
 
 class PlayUABot(object):
-    _key = open('/etc/playua.cfg', 'r').read().replace('\n', '')
-    _rss_urls = [
-        "http://playua.net/feed/",
-        "https://www.youtube.com/feeds/videos.xml?"
-        "channel_id=UCKJZ5id-vvCi9_5ERTmBNHQ"
-    ]
+    _key = config['secret_key']
+    _rss_urls = config['feeds']
 
     def __init__(self):
         logging.debug('Starting application...')
+        self.debug = False
 
         self.bot = telegram.Bot(self._key)
 
         self.chats_manager = Chats(self)
-        self.chats_manager.refresh()
 
         self.feed_managers = []
         for url in self._rss_urls:
             feed_manager = Feed(self, url)
-            feed_manager.refresh()
             self.feed_managers.append(feed_manager)
 
-        self.debug = True
-
-        self.dispatch()
-
-    @staticmethod
-    def help(bot, update):
-        bot.sendMessage(chat_id=update.message.chat_id,
-                        text="Маленький чатбот який повідомлює про новини "
-                             "на сайті PlayUA.net")
-
-    def dispatch(self):
-        self._updater = Updater(token=self._key)
-        self._updater.dispatcher.addTelegramCommandHandler('help', self.help)
-        logging.error('start poll')
-        self._updater.start_polling()
-        logging.error('stop poll')
-
     def start(self):
-        logging.debug('Loop started')
+        logging.debug('Main loop started')
         while True:
+            logging.debug('Main loop iteration')
             try:
-                logging.debug("Send to %s chats %s messages." % (
-                    len(self.chats_manager.chats),
-                    len(self.feed_managers[0].entries) +
-                    len(self.feed_managers[1].entries)
-                ))
-                for chat in self.chats_manager.chats:
-                    for fmgmt in self.feed_managers:
-                        for entry in fmgmt.entries:
-                            if self.debug:
-                                logging.debug("Send fake to chat %s: %s" % (
-                                    chat, entry))
-                            else:
-                                chat.send(entry)
-                        fmgmt.clear()
+                # Trick in next few lines, chats should be locked first,
+                # cause in ase of error new entries from feeds wount be
+                # marked as readed.
+                with get_chats(self.chats_manager) as chats, \
+                     get_entries(self.feed_managers) as entries:
 
+                    logging.debug("Send to %s chats %s messages." % (
+                        len(chats), len(entries)))
+
+                    for chat in chats:
+                        for entry in entries:
+                            logging.debug(
+                                "Send msg to chat %s: %s" % (chat, entry))
+
+                            if not self.debug:
+                                chat.send(entry)
+            except NoChatsFound:
+                logging.error('NoChatsFound')
+                sleep(1)
             except NetworkError:
                 logging.error('NetworkError')
                 sleep(1)
-                # raise
             except Unauthorized:
                 logging.error('Unauthorized')
                 sleep(1)
-                # raise
-
-            for mng in self.feed_managers + [self.chats_manager]:
-                mng.refresh()
-            logging.debug('Data refreshed')
 
 
 if __name__ == '__main__':

@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+#
+# Post fresh PlayUA entries to Telegram
+# Mykola Yakovliev <vegasq@gmail.com>
+# 2016
+
 import peewee
 import logging
 
